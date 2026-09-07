@@ -1,0 +1,42 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          bt-agent
+# Required-Start:    $local_fs dbus
+# Required-Stop:     $local_fs
+# Default-Start:     5
+# Default-Stop:      0 1 6
+# Short-Description: Headless Bluetooth pairing agent for OpenAuto
+# Description:       Powers on the local Bluetooth adapter and keeps a
+#                    NoInputNoOutput pairing agent registered, so an
+#                    AndroidAuto phone can pair with the head unit
+#                    without a keyboard or display attached.
+### END INIT INFO
+
+PIDFILE=/var/run/bt-agent.pid
+
+. /etc/init.d/functions
+
+case "${1:-}" in
+  start)
+    log_daemon_msg "Starting bt-agent" "bt-agent"
+    start-stop-daemon -S -b -m -p $PIDFILE -x /usr/bin/bt-agent-loop.sh
+    log_end_msg $?
+    ;;
+  stop)
+    log_daemon_msg "Stopping bt-agent" "bt-agent"
+    start-stop-daemon -K -p $PIDFILE
+    pkill -f /usr/bin/bt-agent-loop.sh 2>/dev/null
+    rm -f $PIDFILE
+    log_end_msg 0
+    ;;
+  restart|reload|force-reload)
+    ${0:-} stop
+    ${0:-} start
+    ;;
+  *)
+    echo "Usage: ${0:-} {start|stop|restart|reload|force-reload}" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

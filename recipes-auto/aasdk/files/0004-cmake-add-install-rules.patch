@@ -1,0 +1,24 @@
+From: Yocto build fix
+Subject: [PATCH] CMakeLists: add missing install() rules
+
+Upstream CMakeLists.txt never defines any install() rules, so
+`cmake --build . --target install` (what OE's cmake.bbclass do_install
+runs) fails with "ninja: error: unknown target 'install'". Add
+standard GNUInstallDirs-based rules for the two shared libraries
+(aasdk, aasdk_proto), the public headers, and the generated protobuf
+headers (needed by downstream consumers such as openauto).
+
+Upstream-Status: Inappropriate [oe-specific: upstream has no install support]
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -89,3 +89,9 @@ if(AASDK_TEST)
+         setup_target_for_coverage(NAME aasdk_coverage EXECUTABLE aasdk_ut DEPENDENCIES aasdk_ut)
+     endif(AASDK_CODE_COVERAGE)
+ endif(AASDK_TEST)
++
++include(GNUInstallDirs)
++install(TARGETS aasdk aasdk_proto
++        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
++install(DIRECTORY ${include_directory}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
++install(DIRECTORY ${CMAKE_BINARY_DIR}/aasdk_proto/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/aasdk_proto FILES_MATCHING PATTERN "*.h")

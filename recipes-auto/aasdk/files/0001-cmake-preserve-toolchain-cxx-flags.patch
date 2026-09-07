@@ -1,0 +1,27 @@
+From: Yocto build fix
+Subject: [PATCH] CMakeLists: preserve toolchain-provided CMAKE_CXX_FLAGS
+
+Upstream CMakeLists.txt rebuilds CMAKE_CXX_FLAGS from
+CMAKE_CXX_FLAGS_INIT (which is only seeded from the CXXFLAGS
+environment variable), discarding the architecture flags
+(-mthumb -mfpu=neon -mfloat-abi=hard -mcpu=... etc.) that OE's
+generated toolchain.cmake sets on CMAKE_CXX_FLAGS itself. Without
+those flags the cross compiler falls back to its default (soft-float)
+target, which then fails to include <gnu/stubs-soft.h> against a
+sysroot whose glibc was built hard-float only.
+
+Preserve whatever CMAKE_CXX_FLAGS the toolchain file already set
+instead of discarding it.
+
+Upstream-Status: Inappropriate [oe-specific cross-compile toolchain fix]
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -15,7 +15,7 @@
+ 
+ SET(CMAKE_CXX_STANDARD 14)
+ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake_modules/")
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_INIT} -fPIC -Wall -pedantic")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -Wall -pedantic")
+ set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
+ set(CMAKE_CXX_FLAGS_RELEASE "-g -O3")

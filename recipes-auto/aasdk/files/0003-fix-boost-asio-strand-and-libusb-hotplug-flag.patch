@@ -1,0 +1,39 @@
+diff --git a/src/Channel/ServiceChannel.cpp b/src/Channel/ServiceChannel.cpp
+index 74b3a5b..ae8b2aa 100644
+--- a/src/Channel/ServiceChannel.cpp
++++ b/src/Channel/ServiceChannel.cpp
+@@ -38,7 +38,7 @@ ServiceChannel::ServiceChannel(boost::asio::io_service::strand& strand,
+ 
+ void ServiceChannel::send(messenger::Message::Pointer message, SendPromise::Pointer promise)
+ {
+-    auto sendPromise = messenger::SendPromise::defer(strand_.get_io_service());
++    auto sendPromise = messenger::SendPromise::defer(strand_.context());
+     io::PromiseLink<>::forward(*sendPromise, std::move(promise));
+     messenger_->enqueueSend(std::move(message), std::move(sendPromise));
+ }
+diff --git a/src/USB/AccessoryModeQueryChain.cpp b/src/USB/AccessoryModeQueryChain.cpp
+index 5b4b4fe..f4eb7cc 100644
+--- a/src/USB/AccessoryModeQueryChain.cpp
++++ b/src/USB/AccessoryModeQueryChain.cpp
+@@ -58,7 +58,7 @@ void AccessoryModeQueryChain::start(DeviceHandle handle, Promise::Pointer promis
+                 });
+ 
+             this->startQuery(AccessoryModeQueryType::PROTOCOL_VERSION,
+-                             std::make_shared<USBEndpoint>(usbWrapper_, strand_.get_io_service(), std::move(handle)),
++                             std::make_shared<USBEndpoint>(usbWrapper_, strand_.context(), std::move(handle)),
+                              std::move(queryPromise));
+         }
+     });
+diff --git a/src/USB/USBHub.cpp b/src/USB/USBHub.cpp
+index df7c2e4..d384d80 100644
+--- a/src/USB/USBHub.cpp
++++ b/src/USB/USBHub.cpp
+@@ -50,7 +50,7 @@ void USBHub::start(Promise::Pointer promise)
+         if(self_ == nullptr)
+         {
+             self_ = this->shared_from_this();
+-            hotplugHandle_ = usbWrapper_.hotplugRegisterCallback(LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED, LIBUSB_HOTPLUG_NO_FLAGS, LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY,
++            hotplugHandle_ = usbWrapper_.hotplugRegisterCallback(LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED, static_cast<libusb_hotplug_flag>(LIBUSB_HOTPLUG_NO_FLAGS), LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY,
+                                                                  LIBUSB_HOTPLUG_MATCH_ANY, reinterpret_cast<libusb_hotplug_callback_fn>(&USBHub::hotplugEventsHandler), reinterpret_cast<void*>(this));
+         }
+     });

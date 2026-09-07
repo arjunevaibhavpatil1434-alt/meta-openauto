@@ -1,0 +1,33 @@
+From: Yocto build fix
+Subject: [PATCH] CMakeLists: preserve toolchain CXX flags and add install() rules
+
+Two fixes, same pattern seen in the aasdk recipe this project depends on:
+
+1. CMAKE_CXX_FLAGS was rebuilt from CMAKE_CXX_FLAGS_INIT (only reflects
+   the CXXFLAGS env var), discarding the toolchain's -mfloat-abi=hard
+   etc. Build from CMAKE_CXX_FLAGS instead so those are preserved.
+
+2. Upstream never installs the autoapp/btservice binaries anywhere, so
+   OE's cmake do_install step has nothing to do. Install both to bindir.
+
+Upstream-Status: Inappropriate [oe-specific cross-compile/packaging fixes]
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -21,7 +21,7 @@ set(Boost_USE_STATIC_RUNTIME OFF)
+
+ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake_modules/")
+ SET(CMAKE_CXX_STANDARD 14)
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_INIT} -Wall -pedantic -fPIC")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -pedantic -fPIC")
+ set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
+ set(CMAKE_CXX_FLAGS_RELEASE "-g -O3")
+
+@@ -98,3 +98,7 @@ target_link_libraries(btservice
+                         ${Qt5MultimediaWidgets_LIBRARIES}
+                         ${PROTOBUF_LIBRARIES}
+                         ${AASDK_PROTO_LIBRARIES})
++
++include(GNUInstallDirs)
++install(TARGETS autoapp btservice
++        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

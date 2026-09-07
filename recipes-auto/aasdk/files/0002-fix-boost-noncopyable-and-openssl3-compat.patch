@@ -1,0 +1,144 @@
+diff --git a/include/f1x/aasdk/IO/Promise.hpp b/include/f1x/aasdk/IO/Promise.hpp
+index 9f5e222..6fb56fc 100644
+--- a/include/f1x/aasdk/IO/Promise.hpp
++++ b/include/f1x/aasdk/IO/Promise.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <functional>
+ #include <boost/asio.hpp>
+ #include <f1x/aasdk/Error/Error.hpp>
+diff --git a/include/f1x/aasdk/Messenger/MessageInStream.hpp b/include/f1x/aasdk/Messenger/MessageInStream.hpp
+index 262c3f5..65a6dfb 100644
+--- a/include/f1x/aasdk/Messenger/MessageInStream.hpp
++++ b/include/f1x/aasdk/Messenger/MessageInStream.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <f1x/aasdk/Transport/ITransport.hpp>
+ #include <f1x/aasdk/Messenger/IMessageInStream.hpp>
+ #include <f1x/aasdk/Messenger/ICryptor.hpp>
+diff --git a/include/f1x/aasdk/Messenger/MessageOutStream.hpp b/include/f1x/aasdk/Messenger/MessageOutStream.hpp
+index 028839a..a5381c1 100644
+--- a/include/f1x/aasdk/Messenger/MessageOutStream.hpp
++++ b/include/f1x/aasdk/Messenger/MessageOutStream.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <f1x/aasdk/Common/Data.hpp>
+ #include <f1x/aasdk/Transport/ITransport.hpp>
+ #include <f1x/aasdk/Messenger/ICryptor.hpp>
+diff --git a/include/f1x/aasdk/Messenger/Messenger.hpp b/include/f1x/aasdk/Messenger/Messenger.hpp
+index f922774..94e5507 100644
+--- a/include/f1x/aasdk/Messenger/Messenger.hpp
++++ b/include/f1x/aasdk/Messenger/Messenger.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <boost/asio.hpp>
+ #include <list>
+ #include <f1x/aasdk/Messenger/IMessenger.hpp>
+diff --git a/include/f1x/aasdk/Transport/Transport.hpp b/include/f1x/aasdk/Transport/Transport.hpp
+index 04ccc27..7c8242d 100644
+--- a/include/f1x/aasdk/Transport/Transport.hpp
++++ b/include/f1x/aasdk/Transport/Transport.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <list>
+ #include <queue>
+ #include <boost/asio.hpp>
+diff --git a/include/f1x/aasdk/USB/AOAPDevice.hpp b/include/f1x/aasdk/USB/AOAPDevice.hpp
+index 7cbd25a..1dce323 100644
+--- a/include/f1x/aasdk/USB/AOAPDevice.hpp
++++ b/include/f1x/aasdk/USB/AOAPDevice.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <utility>
+ #include <boost/asio.hpp>
+ #include <libusb.h>
+diff --git a/include/f1x/aasdk/USB/AccessoryModeQuery.hpp b/include/f1x/aasdk/USB/AccessoryModeQuery.hpp
+index e0258a2..af4539a 100644
+--- a/include/f1x/aasdk/USB/AccessoryModeQuery.hpp
++++ b/include/f1x/aasdk/USB/AccessoryModeQuery.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <boost/asio.hpp>
+ #include <libusb.h>
+ #include <list>
+diff --git a/include/f1x/aasdk/USB/AccessoryModeQueryChain.hpp b/include/f1x/aasdk/USB/AccessoryModeQueryChain.hpp
+index 65d38c1..592878c 100644
+--- a/include/f1x/aasdk/USB/AccessoryModeQueryChain.hpp
++++ b/include/f1x/aasdk/USB/AccessoryModeQueryChain.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <f1x/aasdk/USB/IUSBWrapper.hpp>
+ #include <f1x/aasdk/USB/IAccessoryModeQueryFactory.hpp>
+ #include <f1x/aasdk/USB/IAccessoryModeQueryChain.hpp>
+diff --git a/include/f1x/aasdk/USB/USBEndpoint.hpp b/include/f1x/aasdk/USB/USBEndpoint.hpp
+index d603391..ccdbcab 100644
+--- a/include/f1x/aasdk/USB/USBEndpoint.hpp
++++ b/include/f1x/aasdk/USB/USBEndpoint.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <unordered_map>
+ #include <memory>
+ #include <boost/asio.hpp>
+diff --git a/include/f1x/aasdk/USB/USBHub.hpp b/include/f1x/aasdk/USB/USBHub.hpp
+index ca05e84..2b3c979 100644
+--- a/include/f1x/aasdk/USB/USBHub.hpp
++++ b/include/f1x/aasdk/USB/USBHub.hpp
+@@ -18,6 +18,8 @@
+ 
+ #pragma once
+ 
++#include <boost/noncopyable.hpp>
++
+ #include <boost/asio.hpp>
+ #include <list>
+ #include <f1x/aasdk/USB/IUSBHub.hpp>
+diff --git a/src/Transport/SSLWrapper.cpp b/src/Transport/SSLWrapper.cpp
+index 726972b..04f6881 100644
+--- a/src/Transport/SSLWrapper.cpp
++++ b/src/Transport/SSLWrapper.cpp
+@@ -40,7 +40,9 @@ SSLWrapper::SSLWrapper()
+ 
+ SSLWrapper::~SSLWrapper()
+ {
++#if (OPENSSL_VERSION_NUMBER < 0x30000000L)
+     FIPS_mode_set(0);
++#endif
+     ENGINE_cleanup();
+     CONF_modules_unload(1);
+     EVP_cleanup();

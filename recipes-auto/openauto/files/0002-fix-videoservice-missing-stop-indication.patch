@@ -1,0 +1,43 @@
+From: Yocto build fix
+Subject: [PATCH] VideoService: implement missing onAVChannelStopIndication
+
+aasdk::channel::av::IVideoServiceChannelEventHandler declares
+onAVChannelStopIndication() as pure virtual (see
+IVideoServiceChannelEventHandler.hpp), and AudioService already
+implements the analogous onAVChannelStopIndication for audio, but
+VideoService never overrides it. This leaves VideoService abstract,
+so `std::make_shared<VideoService>(...)` in ServiceFactory.cpp fails
+to compile ("invalid new-expression of abstract class type").
+
+Implement it mirroring AudioService's handler: reset the session and
+stop the video output.
+
+Upstream-Status: Inappropriate [oe-specific: fixes a missing override against the aasdk revision this recipe builds against]
+
+--- a/include/f1x/openauto/autoapp/Service/VideoService.hpp
++++ b/include/f1x/openauto/autoapp/Service/VideoService.hpp
+@@ -46,6 +46,7 @@ public:
+     void onChannelOpenRequest(const aasdk::proto::messages::ChannelOpenRequest& request) override;
+     void onAVChannelSetupRequest(const aasdk::proto::messages::AVChannelSetupRequest& request) override;
+     void onAVChannelStartIndication(const aasdk::proto::messages::AVChannelStartIndication& indication) override;
++    void onAVChannelStopIndication(const aasdk::proto::messages::AVChannelStopIndication& indication) override;
+     void onAVMediaWithTimestampIndication(aasdk::messenger::Timestamp::ValueType timestamp, const aasdk::common::DataConstBuffer& buffer) override;
+     void onAVMediaIndication(const aasdk::common::DataConstBuffer& buffer) override;
+     void onVideoFocusRequest(const aasdk::proto::messages::VideoFocusRequest& request) override;
+--- a/src/autoapp/Service/VideoService.cpp
++++ b/src/autoapp/Service/VideoService.cpp
+@@ -95,6 +95,14 @@ void VideoService::onAVChannelStartIndication(const aasdk::proto::messages::AVCh
+     channel_->receive(this->shared_from_this());
+ }
+
++void VideoService::onAVChannelStopIndication(const aasdk::proto::messages::AVChannelStopIndication& indication)
++{
++    OPENAUTO_LOG(info) << "[VideoService] stop indication, session: " << session_;
++    session_ = -1;
++    videoOutput_->stop();
++    channel_->receive(this->shared_from_this());
++}
++
+ void VideoService::onAVMediaWithTimestampIndication(aasdk::messenger::Timestamp::ValueType timestamp, const aasdk::common::DataConstBuffer& buffer)
+ {
+     videoOutput_->write(timestamp, buffer);
