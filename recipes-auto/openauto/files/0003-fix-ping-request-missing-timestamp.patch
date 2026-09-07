@@ -1,0 +1,41 @@
+From: Yocto build fix
+Subject: [PATCH] AndroidAutoEntity: set timestamp on outgoing PingRequest
+
+AndroidAutoEntity::sendPing() sends a completely default-constructed
+PingRequest, leaving its `timestamp` field (aasdk_proto's
+PingRequestMessage.proto: `int64 timestamp = 1;`) at proto3's implicit
+zero default. Modern Android Auto silently drops a ping with no valid
+timestamp instead of answering it -- everything else in the session
+(handshake, auth, service discovery, audio/video channel setup) works
+fine, but pongsCount_ never advances, so after two 5s ping cycles
+(~10s) Pinger::onTimerExceeded() rejects the promise, "ping timer
+exceeded" fires, and AndroidAutoEntity tears the whole session down.
+
+Set the timestamp to the current epoch time in milliseconds, same
+convention used elsewhere in this codebase (AudioInputService.cpp,
+InputService.cpp) for their AV timestamps.
+
+Upstream-Status: Inappropriate [oe-specific: this device's RTC has no
+battery backup so its wall clock is unreliable, and a fresh boot's
+clock is arbitrary until/unless NTP has run; regardless, upstream
+sends this field unset in a way real Android Auto clients don't
+tolerate]
+
+--- a/src/autoapp/Service/AndroidAutoEntity.cpp
++++ b/src/autoapp/Service/AndroidAutoEntity.cpp
+@@ -19,6 +19,7 @@
+ #include <f1x/aasdk/Channel/Control/ControlServiceChannel.hpp>
+ #include <f1x/openauto/autoapp/Service/AndroidAutoEntity.hpp>
+ #include <f1x/openauto/Common/Log.hpp>
++#include <chrono>
+
+ namespace f1x
+ {
+@@ -272,6 +273,8 @@
+     promise->then([]() {}, std::bind(&AndroidAutoEntity::onChannelError, this->shared_from_this(), std::placeholders::_1));
+
+     aasdk::proto::messages::PingRequest request;
++    request.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::system_clock::now().time_since_epoch()).count());
+     controlServiceChannel_->sendPingRequest(request, std::move(promise));
+ }

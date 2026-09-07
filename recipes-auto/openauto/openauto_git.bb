@@ -8,6 +8,7 @@ LIC_FILES_CHKSUM = "file://include/f1x/openauto/autoapp/App.hpp;beginline=1;endl
 SRC_URI = "git://github.com/f1xpl/openauto.git;protocol=https;branch=development \
     file://0001-cmake-fixes.patch \
     file://0002-fix-videoservice-missing-stop-indication.patch \
+    file://0003-fix-ping-request-missing-timestamp.patch \
     file://openauto.init \
     file://openauto-start.sh \
 "
