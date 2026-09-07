@@ -20,4 +20,5 @@ CORE_IMAGE_EXTRA_INSTALL += " \
     usbutils \
     alsa-utils \
     linux-firmware-rtl8192cu \
+    ttf-dejavu-sans \
 "
