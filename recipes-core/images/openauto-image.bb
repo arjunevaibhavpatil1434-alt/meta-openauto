@@ -21,4 +21,7 @@ CORE_IMAGE_EXTRA_INSTALL += " \
     alsa-utils \
     linux-firmware-rtl8192cu \
     ttf-dejavu-sans \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
 "
