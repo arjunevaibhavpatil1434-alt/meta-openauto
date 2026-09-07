@@ -13,10 +13,19 @@ SRCREV = "46b01b5b134f33d8ddc3dab76829d4b1350e0522"
 
 S = "${WORKDIR}/git"
 
-# alsa-lib: default RTAUDIO_API_ALSA backend.
-# pulseaudio: openauto's RtAudioOutput prefers RtAudio::LINUX_PULSE when
-# available, falling back to the default (ALSA) API otherwise.
-DEPENDS = "alsa-lib pulseaudio"
+# alsa-lib: RTAUDIO_API_ALSA backend, matching the USB audio hardware this
+# image actually has.
+#
+# The Pulse backend is deliberately built out: openauto's RtAudioOutput
+# prefers RtAudio::LINUX_PULSE over ALSA whenever RtAudio was compiled
+# with Pulse support, but this image never ships a running pulseaudio
+# daemon. That left every audio channel blocking on
+# pa_context_connect()/"Connection refused", which in turn stalled the
+# aasdk thread pool long enough for the AndroidAutoEntity ping heartbeat
+# to time out and tear the whole AndroidAuto session down after ~10s.
+# Disabling RTAUDIO_API_PULSE makes ALSA the only (and therefore
+# preferred) compiled-in backend.
+DEPENDS = "alsa-lib"
 
 inherit cmake pkgconfig
 
@@ -24,6 +33,8 @@ EXTRA_OECMAKE += " \
     -DCMAKE_HAVE_PTHREAD_H=1 \
     -DCMAKE_HAVE_LIBC_PTHREAD=1 \
     -DRTAUDIO_BUILD_TESTING=OFF \
+    -DRTAUDIO_API_ALSA=ON \
+    -DRTAUDIO_API_PULSE=OFF \
 "
 
 FILES:${PN} += "${libdir}/librtaudio.so.*"
