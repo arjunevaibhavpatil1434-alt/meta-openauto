@@ -1,0 +1,50 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          openauto
+# Required-Start:    $local_fs udev
+# Required-Stop:     $local_fs
+# Default-Start:     5
+# Default-Stop:      0 1 6
+# Short-Description: OpenAuto AndroidAuto kiosk app
+# Description:       Launches autoapp full-screen via eglfs/KMS, respawning
+#                    it if it exits.
+### END INIT INFO
+
+PIDFILE=/var/run/openauto.pid
+# Invoked with the caller's PATH (e.g. an interactive dropbear session,
+# which lacks /sbin), so reference start-stop-daemon by full path rather
+# than relying on it being found.
+SSD=/sbin/start-stop-daemon
+
+. /etc/init.d/functions
+
+case "${1:-}" in
+  start)
+    log_daemon_msg "Starting openauto" "openauto"
+    $SSD -S -b -m -p $PIDFILE -x /usr/bin/openauto-start.sh
+    log_end_msg $?
+    ;;
+  stop)
+    log_daemon_msg "Stopping openauto" "openauto"
+    # start-stop-daemon -x can't match a shell script (it resolves
+    # /proc/pid/exe, which is /bin/sh for a script, not the script path),
+    # so find the respawn loop the way this image's own functions file
+    # recommends for pidofproc: scan `ps` output for the pattern.
+    for pid in `ps | grep '/usr/bin/openauto-start.sh' | grep -v grep | awk '{print $1}'`; do
+        kill $pid 2>/dev/null
+    done
+    $SSD -K -x /usr/bin/autoapp
+    rm -f $PIDFILE
+    log_end_msg 0
+    ;;
+  restart|reload|force-reload)
+    ${0:-} stop
+    ${0:-} start
+    ;;
+  *)
+    echo "Usage: ${0:-} {start|stop|restart|reload|force-reload}" >&2
+    exit 1
+    ;;
+esac
+
+exit 0
