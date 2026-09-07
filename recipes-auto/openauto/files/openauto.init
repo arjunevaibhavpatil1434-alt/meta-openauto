@@ -20,12 +20,12 @@ SSD=/sbin/start-stop-daemon
 
 case "${1:-}" in
   start)
-    log_daemon_msg "Starting openauto" "openauto"
+    echo -n "Starting openauto: "
     $SSD -S -b -m -p $PIDFILE -x /usr/bin/openauto-start.sh
-    log_end_msg $?
+    echo "done"
     ;;
   stop)
-    log_daemon_msg "Stopping openauto" "openauto"
+    echo -n "Stopping openauto: "
     # start-stop-daemon -x can't match a shell script (it resolves
     # /proc/pid/exe, which is /bin/sh for a script, not the script path),
     # so find the respawn loop the way this image's own functions file
@@ -35,7 +35,7 @@ case "${1:-}" in
     done
     $SSD -K -x /usr/bin/autoapp
     rm -f $PIDFILE
-    log_end_msg 0
+    echo "done"
     ;;
   restart|reload|force-reload)
     ${0:-} stop
