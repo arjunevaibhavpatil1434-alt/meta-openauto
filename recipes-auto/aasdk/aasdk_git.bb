@@ -10,6 +10,8 @@ SRC_URI = "git://github.com/f1xpl/aasdk.git;protocol=https;branch=development \
     file://0002-fix-boost-noncopyable-and-openssl3-compat.patch \
     file://0003-fix-boost-asio-strand-and-libusb-hotplug-flag.patch \
     file://0004-cmake-add-install-rules.patch \
+    file://0005-fix-unaligned-timestamp-and-framesize-reads.patch \
+    file://0006-fix-messenger-intertwined-channels-false-positive.patch \
 "
 SRCREV = "046b3b381595509d0939fa84b14a90978f46ff63"
 

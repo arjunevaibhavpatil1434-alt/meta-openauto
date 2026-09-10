@@ -1,0 +1,91 @@
+From: Yocto build fix
+Subject: [PATCH] Messenger: fix unaligned reads in Timestamp/FrameSize decode
+
+Timestamp::Timestamp(const common::DataConstBuffer&) and
+FrameSize::FrameSize(const common::DataConstBuffer&) decode wire
+values by reinterpret_cast'ing a byte inside an arbitrarily-offset
+const uint8_t* buffer to a reference of the target integer type
+(uint64_t / uint16_t / uint32_t), then let the compiler emit a
+native-width load straight from that address. Since the buffer is a
+byte-offset view into a std::vector<uint8_t> backing store with no
+alignment guarantee, this is undefined behavior (strict-aliasing
+violation) and, on hardware without unaligned-access support for
+multi-register loads, an actual functional bug.
+
+On ARMv7 in particular, LDR/STR (single-register, word/halfword)
+unaligned accesses are handled transparently by the hardware, but
+LDRD/STRD/LDM/STM (double-word / 64-bit) accesses are not: an
+unaligned uint64_t load faults into the kernel's alignment-trap
+handler. Timestamp::Timestamp(const DataConstBuffer&) is invoked on
+every audio/video media-with-timestamp frame
+(VideoServiceChannel::handleAVMediaWithTimestampIndication,
+AudioServiceChannel's equivalent), i.e. continuously while a media
+channel is actively streaming, at a byte offset that is essentially
+never 8-byte aligned. In practice this produces thousands of
+kernel-handled alignment traps per minute of active playback on
+affected hardware, and the resulting emulation overhead can starve
+the transport/IO thread badly enough to trip the channel's own
+timeout logic, tearing down the whole AA session mid-stream.
+
+Fix both call sites (and the sibling FrameSize decode, which reads
+uint16_t/uint32_t the same unsafe way -- those don't fault on ARMv7
+since word/halfword unaligned access is handled in hardware, but it's
+the same undefined-behavior bug) by memcpy'ing into a properly aligned
+local variable instead of pointer-punning the raw buffer.
+
+Upstream-Status: Pending
+
+diff --git a/src/Messenger/FrameSize.cpp b/src/Messenger/FrameSize.cpp
+index 352de2f..15d9efa 100644
+--- a/src/Messenger/FrameSize.cpp
++++ b/src/Messenger/FrameSize.cpp
+@@ -16,6 +16,7 @@
+ *  along with aasdk. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <cstring>
+ #include <boost/endian/conversion.hpp>
+ #include <f1x/aasdk/Messenger/FrameSize.hpp>
+ 
+@@ -47,13 +48,17 @@ FrameSize::FrameSize(const common::DataConstBuffer& buffer)
+     if(buffer.size >= 2)
+     {
+         frameSizeType_ = FrameSizeType::SHORT;
+-        frameSize_ = boost::endian::big_to_native(reinterpret_cast<const uint16_t&>(buffer.cdata[0]));
++        uint16_t frameSizeBig;
++        std::memcpy(&frameSizeBig, buffer.cdata, sizeof(frameSizeBig));
++        frameSize_ = boost::endian::big_to_native(frameSizeBig);
+     }
+ 
+     if(buffer.size >= 6)
+     {
+         frameSizeType_ = FrameSizeType::EXTENDED;
+-        totalSize_ = boost::endian::big_to_native(reinterpret_cast<const uint32_t&>(buffer.cdata[2]));
++        uint32_t totalSizeBig;
++        std::memcpy(&totalSizeBig, buffer.cdata + 2, sizeof(totalSizeBig));
++        totalSize_ = boost::endian::big_to_native(totalSizeBig);
+     }
+ }
+ 
+diff --git a/src/Messenger/Timestamp.cpp b/src/Messenger/Timestamp.cpp
+index 5de4e44..7deaa3a 100644
+--- a/src/Messenger/Timestamp.cpp
++++ b/src/Messenger/Timestamp.cpp
+@@ -16,6 +16,7 @@
+ *  along with aasdk. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <cstring>
+ #include <boost/endian/conversion.hpp>
+ #include <f1x/aasdk/Messenger/Timestamp.hpp>
+ 
+@@ -34,7 +35,8 @@ Timestamp::Timestamp(ValueType stamp)
+ 
+ Timestamp::Timestamp(const common::DataConstBuffer& buffer)
+ {
+-    const ValueType& timestampBig = reinterpret_cast<const ValueType&>(buffer.cdata[0]);
++    ValueType timestampBig;
++    std::memcpy(&timestampBig, buffer.cdata, sizeof(timestampBig));
+     stamp_ = boost::endian::big_to_native(timestampBig);
+ }
+ 

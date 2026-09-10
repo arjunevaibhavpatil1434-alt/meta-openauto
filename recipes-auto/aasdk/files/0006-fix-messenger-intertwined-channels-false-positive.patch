@@ -1,0 +1,226 @@
+From: Yocto build fix
+Subject: [PATCH] Messenger: track in-flight message reassembly per channel
+
+Symptom: an active AndroidAuto session (video streaming + at least one
+continuous audio channel running concurrently) reliably tears itself
+down anywhere from ~10 seconds to a couple of minutes in, always with
+every channel logging the same error simultaneously:
+
+  [error] [VideoService] channel error: AaSdk error code: 29, native code: 0
+  [error] [AudioService] channel error: AaSdk error code: 29, ...
+  [info]  [App] quit.
+
+Error code 29 is ErrorCode::MESSENGER_INTERTWINED_CHANNELS, thrown
+from MessageInStream::receiveFrameHeaderHandler.
+
+Root cause: MessageInStream reassembles a message that spans multiple
+frames (FrameType::FIRST/MIDDLE/LAST) using a single scalar
+Message::Pointer message_ (plus a single FrameType recentFrameType_)
+shared across every channel. It assumed a channel's multi-frame
+message always completes before any other channel's frame can appear
+on the wire, and treated a frame header naming a different channel
+while message_ was still in progress as a fatal protocol violation.
+
+That assumption doesn't hold: the transport is one multiplexed byte
+stream, and the phone is free to (and in practice does, once a large
+multi-frame VIDEO message overlaps with concurrently streaming
+MEDIA_AUDIO/SPEECH_AUDIO/SYSTEM_AUDIO frames) interleave frames
+belonging to different channels while one of them still has a
+multi-frame message in flight. That's routine multiplexing, not
+corruption, but the single shared message_/recentFrameType_ fields
+had no way to represent "more than one channel's message is currently
+partway through reassembly", so the first legitimate interleave after
+two channels are both actively streaming got misread as
+MESSENGER_INTERTWINED_CHANNELS and killed the whole AndroidAutoEntity
+session -- explaining both the intermittent timing (depends on when
+frame timing happens to interleave) and why it reproduces on every
+phone/device tested.
+
+Fix: key the in-progress reassembly state (the partially-built Message
+plus its most recent FrameType) by ChannelId in a map instead of a
+pair of scalars, so each channel's multi-frame message is reassembled
+independently regardless of how the sender interleaves frames from
+other channels on the wire. The transport itself is unaffected -- only
+one physical read is ever outstanding at a time, exactly as before;
+this only fixes which channel's accumulator each completed frame's
+payload gets routed into.
+
+This is safe with respect to the shared Cryptor: EncryptionType is
+per-frame, and in practice only small single-frame (BULK) control
+messages (open/setup/focus/ping) are ever ENCRYPTED -- continuous
+high-bandwidth VIDEO/AUDIO media frames that actually interleave are
+PLAIN and never touch the cryptor, so decrypt() call ordering relative
+to the single shared SSL/BIO stream is unchanged.
+
+Upstream-Status: Pending
+
+diff --git a/include/f1x/aasdk/Messenger/MessageInStream.hpp b/include/f1x/aasdk/Messenger/MessageInStream.hpp
+index 262c3f5..89ccb64 100644
+--- a/include/f1x/aasdk/Messenger/MessageInStream.hpp
++++ b/include/f1x/aasdk/Messenger/MessageInStream.hpp
+@@ -18,6 +18,7 @@
+ 
+ #pragma once
+ 
++#include <map>
+ #include <f1x/aasdk/Transport/ITransport.hpp>
+ #include <f1x/aasdk/Messenger/IMessageInStream.hpp>
+ #include <f1x/aasdk/Messenger/ICryptor.hpp>
+@@ -41,16 +42,31 @@ public:
+ private:
+     using std::enable_shared_from_this<MessageInStream>::shared_from_this;
+ 
++    // A single logical message may be split across multiple frames
++    // (FIRST/MIDDLE/LAST). The transport is a single multiplexed byte
++    // stream, and the sender is free to interleave frames belonging to
++    // different channels while one of them still has a multi-frame
++    // message in progress (this is routine once, e.g., a large VIDEO
++    // frame and concurrent MEDIA_AUDIO frames are both in flight) --
++    // so in-progress reassembly state has to be tracked per channel
++    // rather than as a single pair of fields, or an interleaved frame
++    // from another channel gets misread as a protocol violation
++    // (MESSENGER_INTERTWINED_CHANNELS) and tears down the whole session.
++    struct PendingMessage
++    {
++        Message::Pointer message;
++        FrameType recentFrameType;
++    };
++
+     void receiveFrameHeaderHandler(const common::DataConstBuffer& buffer);
+-    void receiveFrameSizeHandler(const common::DataConstBuffer& buffer);
+-    void receiveFramePayloadHandler(const common::DataConstBuffer& buffer);
++    void receiveFrameSizeHandler(const common::DataConstBuffer& buffer, ChannelId channelId);
++    void receiveFramePayloadHandler(const common::DataConstBuffer& buffer, ChannelId channelId);
+ 
+     boost::asio::io_service::strand strand_;
+     transport::ITransport::Pointer transport_;
+     ICryptor::Pointer cryptor_;
+-    FrameType recentFrameType_;
+     ReceivePromise::Pointer promise_;
+-    Message::Pointer message_;
++    std::map<ChannelId, PendingMessage> pendingMessages_;
+ };
+ 
+ }
+diff --git a/src/Messenger/MessageInStream.cpp b/src/Messenger/MessageInStream.cpp
+index 72a666f..001ca80 100644
+--- a/src/Messenger/MessageInStream.cpp
++++ b/src/Messenger/MessageInStream.cpp
+@@ -63,29 +63,25 @@ void MessageInStream::startReceive(ReceivePromise::Pointer promise)
+ void MessageInStream::receiveFrameHeaderHandler(const common::DataConstBuffer& buffer)
+ {
+     FrameHeader frameHeader(buffer);
++    const ChannelId channelId = frameHeader.getChannelId();
+ 
+-    if(message_ == nullptr)
++    auto pendingIter = pendingMessages_.find(channelId);
++    if(pendingIter == pendingMessages_.end())
+     {
+-        message_ = std::make_shared<Message>(frameHeader.getChannelId(), frameHeader.getEncryptionType(), frameHeader.getMessageType());
+-    }
+-    else if(message_->getChannelId() != frameHeader.getChannelId())
+-    {
+-        message_.reset();
+-        promise_->reject(error::Error(error::ErrorCode::MESSENGER_INTERTWINED_CHANNELS));
+-        promise_.reset();
+-        return;
++        pendingIter = pendingMessages_.emplace(channelId,
++            PendingMessage{std::make_shared<Message>(channelId, frameHeader.getEncryptionType(), frameHeader.getMessageType()), FrameType::FIRST}).first;
+     }
+ 
+-    recentFrameType_ = frameHeader.getType();
++    pendingIter->second.recentFrameType = frameHeader.getType();
+     const size_t frameSize = FrameSize::getSizeOf(frameHeader.getType() == FrameType::FIRST ? FrameSizeType::EXTENDED : FrameSizeType::SHORT);
+ 
+     auto transportPromise = transport::ITransport::ReceivePromise::defer(strand_);
+     transportPromise->then(
+-        [this, self = this->shared_from_this()](common::Data data) mutable {
+-            this->receiveFrameSizeHandler(common::DataConstBuffer(data));
++        [this, self = this->shared_from_this(), channelId](common::Data data) mutable {
++            this->receiveFrameSizeHandler(common::DataConstBuffer(data), channelId);
+         },
+-        [this, self = this->shared_from_this()](const error::Error& e) mutable {
+-            message_.reset();
++        [this, self = this->shared_from_this(), channelId](const error::Error& e) mutable {
++            pendingMessages_.erase(channelId);
+             promise_->reject(e);
+             promise_.reset();
+         });
+@@ -93,15 +89,15 @@ void MessageInStream::receiveFrameHeaderHandler(const common::DataConstBuffer& b
+     transport_->receive(frameSize, std::move(transportPromise));
+ }
+ 
+-void MessageInStream::receiveFrameSizeHandler(const common::DataConstBuffer& buffer)
++void MessageInStream::receiveFrameSizeHandler(const common::DataConstBuffer& buffer, ChannelId channelId)
+ {
+     auto transportPromise = transport::ITransport::ReceivePromise::defer(strand_);
+     transportPromise->then(
+-        [this, self = this->shared_from_this()](common::Data data) mutable {
+-            this->receiveFramePayloadHandler(common::DataConstBuffer(data));
++        [this, self = this->shared_from_this(), channelId](common::Data data) mutable {
++            this->receiveFramePayloadHandler(common::DataConstBuffer(data), channelId);
+         },
+-        [this, self = this->shared_from_this()](const error::Error& e) mutable {
+-            message_.reset();
++        [this, self = this->shared_from_this(), channelId](const error::Error& e) mutable {
++            pendingMessages_.erase(channelId);
+             promise_->reject(e);
+             promise_.reset();
+         });
+@@ -110,17 +106,20 @@ void MessageInStream::receiveFrameSizeHandler(const common::DataConstBuffer& buf
+     transport_->receive(frameSize.getSize(), std::move(transportPromise));
+ }
+ 
+-void MessageInStream::receiveFramePayloadHandler(const common::DataConstBuffer& buffer)
+-{   
+-    if(message_->getEncryptionType() == EncryptionType::ENCRYPTED)
++void MessageInStream::receiveFramePayloadHandler(const common::DataConstBuffer& buffer, ChannelId channelId)
++{
++    auto pendingIter = pendingMessages_.find(channelId);
++    Message::Pointer& message = pendingIter->second.message;
++
++    if(message->getEncryptionType() == EncryptionType::ENCRYPTED)
+     {
+         try
+         {
+-            cryptor_->decrypt(message_->getPayload(), buffer);
++            cryptor_->decrypt(message->getPayload(), buffer);
+         }
+         catch(const error::Error& e)
+         {
+-            message_.reset();
++            pendingMessages_.erase(pendingIter);
+             promise_->reject(e);
+             promise_.reset();
+             return;
+@@ -128,12 +127,16 @@ void MessageInStream::receiveFramePayloadHandler(const common::DataConstBuffer&
+     }
+     else
+     {
+-        message_->insertPayload(buffer);
++        message->insertPayload(buffer);
+     }
+ 
+-    if(recentFrameType_ == FrameType::BULK || recentFrameType_ == FrameType::LAST)
++    const FrameType recentFrameType = pendingIter->second.recentFrameType;
++
++    if(recentFrameType == FrameType::BULK || recentFrameType == FrameType::LAST)
+     {
+-        promise_->resolve(std::move(message_));
++        auto completedMessage = std::move(message);
++        pendingMessages_.erase(pendingIter);
++        promise_->resolve(std::move(completedMessage));
+         promise_.reset();
+     }
+     else
+@@ -143,8 +146,8 @@ void MessageInStream::receiveFramePayloadHandler(const common::DataConstBuffer&
+             [this, self = this->shared_from_this()](common::Data data) mutable {
+                 this->receiveFrameHeaderHandler(common::DataConstBuffer(data));
+             },
+-            [this, self = this->shared_from_this()](const error::Error& e) mutable {
+-                message_.reset();
++            [this, self = this->shared_from_this(), channelId](const error::Error& e) mutable {
++                pendingMessages_.erase(channelId);
+                 promise_->reject(e);
+                 promise_.reset();
+             });
