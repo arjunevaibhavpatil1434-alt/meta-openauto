@@ -1,0 +1,38 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: show mouse cursor by default
+
+This head unit has no touchscreen -- input is a plain USB mouse, whose
+clicks InputDevice::handleTouchEvent() already translates into Android
+Auto touch events (press/drag/release) transparently. But main()
+starts the app with qApplication.setOverrideCursor(Qt::BlankCursor),
+so the pointer is invisible from boot. Clicks still land correctly,
+but the driver has no visual feedback for where the pointer actually
+is, which reads as "clicking doesn't work" when it's really just
+aiming blind.
+
+There is a "Toggle Cursor" button on MainWindow that flips this, but
+MainWindow is only reachable before a phone is connected -- once the
+Android Auto video widget is up it covers MainWindow, so the toggle
+can't be reached mid-session, and hitting an invisible button blind
+on the home screen is not a reliable workaround either.
+
+Default to Qt::ArrowCursor instead. The toggle button and its
+click handler are untouched, so cursor can still be hidden again
+for a touchscreen-equipped build where a visible pointer would be
+undesirable.
+
+Upstream-Status: Inappropriate [oe-specific: this build targets a
+mouse-as-touch head unit with no touchscreen, where upstream's
+blank-by-default assumption doesn't hold]
+
+--- a/src/autoapp/autoapp.cpp
++++ b/src/autoapp/autoapp.cpp
+@@ -102,7 +102,7 @@ int main(int argc, char* argv[])
+     QObject::connect(&mainWindow, &autoapp::ui::MainWindow::openSettings, &settingsWindow, &autoapp::ui::SettingsWindow::showFullScreen);
+     QObject::connect(&mainWindow, &autoapp::ui::MainWindow::openConnectDialog, &connectDialog, &autoapp::ui::ConnectDialog::exec);
+
+-    qApplication.setOverrideCursor(Qt::BlankCursor);
++    qApplication.setOverrideCursor(Qt::ArrowCursor);
+     QObject::connect(&mainWindow, &autoapp::ui::MainWindow::toggleCursor, [&qApplication]() {
+         const auto cursor = qApplication.overrideCursor()->shape() == Qt::BlankCursor ? Qt::ArrowCursor : Qt::BlankCursor;
+         qApplication.setOverrideCursor(cursor);
