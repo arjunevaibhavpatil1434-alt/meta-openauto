@@ -1,0 +1,72 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: apply a live-tunable calibration offset to touch coordinates
+
+With raw touch passthrough (0011) and an accurate touch_screen_config
+declaration (0009), touch delivery and gross alignment are both correct --
+but on-device testing (tapping several different named app icons in AA's
+launcher row and observing what actually opened) showed a small, consistent
+residual error: every tap opened the icon one position to the right of the
+one actually tapped.
+
+Binary-searched the exact correction empirically against real taps rather
+than guessing: with no offset, taps landed about one icon-width too far
+right; adding +150px made it worse (about two icon-widths too far right,
+confirming the sign and giving a rough per-icon-width magnitude); -150px
+was then confirmed correct across several different named icons (Contacts
+included).
+
+The exact value (-150) is specific to this board/panel/cable/AA-app-version
+combination and not something to derive analytically from the geometry
+elsewhere in this codebase -- it was found by direct measurement. Make it
+tunable via AUTOAPP_TOUCH_OFFSET_X/Y environment variables (defaulting to
+0, i.e. no change, if unset) rather than hardcoding it, so it can be
+re-measured and adjusted (via openauto-start.sh, which sets the default) by
+relaunching autoapp with a different value, without a rebuild -- exactly
+the process used to find it in the first place. Y has not shown a similar
+error in testing so its default stays 0.
+
+Upstream-Status: Inappropriate [oe-specific: corrects a residual,
+empirically-measured touch-coordinate offset specific to this board's
+touch/display combination]
+
+diff --git a/src/autoapp/Projection/InputDevice.cpp b/src/autoapp/Projection/InputDevice.cpp
+--- a/src/autoapp/Projection/InputDevice.cpp
++++ b/src/autoapp/Projection/InputDevice.cpp
+@@ -16,6 +16,8 @@
+ *  along with openauto. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <algorithm>
++#include <cstdlib>
+ #include <f1x/openauto/Common/Log.hpp>
+ #include <f1x/openauto/autoapp/Projection/IInputDeviceEventHandler.hpp>
+ #include <f1x/openauto/autoapp/Projection/InputDevice.hpp>
+@@ -299,11 +301,25 @@
+     // the full screen) is redundant with that and was confirmed by
+     // on-device testing (tapping application icons) to land touches on the
+     // wrong element regardless of which rect was used as the divisor.
++    // Tunable live calibration offset, read from the environment so it can
++    // be adjusted (by relaunching autoapp with a different value) without a
++    // rebuild while dialing in the exact correction on real hardware.
++    // AUTOAPP_TOUCH_OFFSET_X/Y default to 0 (no change) if unset/unparsable.
++    static const int offsetX = []() {
++        const char* v = std::getenv("AUTOAPP_TOUCH_OFFSET_X");
++        return v != nullptr ? std::atoi(v) : 0;
++    }();
++    static const int offsetY = []() {
++        const char* v = std::getenv("AUTOAPP_TOUCH_OFFSET_Y");
++        return v != nullptr ? std::atoi(v) : 0;
++    }();
++
+     const QTouchEvent::TouchPoint& touchPoint = touch->touchPoints().first();
+-    const uint32_t x = static_cast<uint32_t>(touchPoint.pos().x());
+-    const uint32_t y = static_cast<uint32_t>(touchPoint.pos().y());
++    const uint32_t x = static_cast<uint32_t>(std::max(0, static_cast<int>(touchPoint.pos().x()) + offsetX));
++    const uint32_t y = static_cast<uint32_t>(std::max(0, static_cast<int>(touchPoint.pos().y()) + offsetY));
+     OPENAUTO_LOG(info) << "[InputDevice] dispatching NATIVE touch x=" << x << " y=" << y
+-                        << " rawPos=(" << touchPoint.pos().x() << "," << touchPoint.pos().y() << ")";
++                        << " rawPos=(" << touchPoint.pos().x() << "," << touchPoint.pos().y() << ")"
++                        << " offset=(" << offsetX << "," << offsetY << ")";
+     eventHandler_->onTouchEvent({type, x, y, 0});
+ 
+     // Accept the event so Qt's touch-to-mouse synthesis (see

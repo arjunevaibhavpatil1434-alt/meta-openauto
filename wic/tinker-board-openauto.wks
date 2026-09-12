@@ -11,6 +11,41 @@
 # working EDID read causes. Forcing a mode means DRM always has a usable
 # framebuffer regardless of whether EDID comes back.
 #
+# The forced mode is 1280x720@60, NOT the panel's true native 1024x600:
+# the actual panel is a Waveshare WS170120 7" HDMI+USB-touch display
+# (fixed 1024x600), but this board's VOP/HDMI output could not be made
+# to establish ANY custom timing computed for 1024x600 -- both a
+# standard CVT modeline (49.00MHz) and a reduced-blanking CVT modeline
+# (43.75MHz) were tried directly via eglfs_kms.json's "mode" (with the
+# connector name bug below already fixed) and both left every CRTC
+# disabled (verified via /sys/kernel/debug/dri/*/state: enable=0
+# active=0) -- rejected outright, not just wrong-refresh. The kernel's
+# own "video=" cmdline forcing of 1024x600 was similarly ineffective:
+# even with it present in /proc/cmdline, the system still ended up
+# scanning out 1024x768 (this board's no-EDID fallback list). UPDATE:
+# the panel's EDID *is* actually readable (128 bytes, valid) via
+# /sys/class/drm/*-HDMI-A-*/edid -- an earlier claim here that it reads
+# back 0 bytes was wrong (scp of that sysfs file always reads 0 bytes
+# since it isn't a seekable regular file; `ssh ... cat ...` works and
+# returns real data). Its decoded preferred timing (1024x600, 49.000MHz,
+# 60Hz, negative sync) was tried directly against Qt's eglfs_kms "mode"
+# and was ALSO rejected outright, identically to the two CVT attempts
+# above and a fourth vendor-timing guess -- four structurally different,
+# mathematically valid 1024x600 timings, all rejected the same way, is
+# conclusive: this VOP's PLL cannot generate a 1024x600 pixel clock at
+# all. It was never an EDID-detection problem.
+#
+# 1280x720 is used instead of that 1024x768 fallback because it's a
+# true CEA-861 standard timing (unlike any hand-computed 1024x600
+# modeline) that this VOP does accept, and its aspect ratio (1.778) is
+# far closer to the panel's actual 1024x600 (1.707, ~4% off) than
+# 1024x768's (1.333, ~28% off) -- letting the panel's own onboard
+# scaler do a clean, near-uniform ~0.8x downscale in both dimensions
+# instead of a badly mismatched 4:3-into-16:9.4 fit. eglfs_kms.json
+# pins Qt to the exact CEA-861 720p60 modeline explicitly so autoapp's
+# actual scanout resolution is guaranteed regardless of what the
+# no-EDID connector fallback would otherwise pick.
+#
 # Disk layout
 # Note that the reference documentation refers to 512 byte disk sectors, but
 # wic uses 1KB blocks

@@ -1,0 +1,62 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: send raw touch coordinates instead of scaling client-side
+
+InputDevice::handleNativeTouchEvent() used to convert touchPoint.pos()
+(the raw touch position, in Qt screen coordinates) into AndroidAuto's
+negotiated video resolution via a client-side scale. Two different values
+were tried for the scaling divisor across earlier fixes -- the video
+widget's on-screen size (to invert its render-time squish) and the full
+screen (assuming Qt's own touch normalization already handled everything)
+-- and both were confirmed by direct on-device testing (tapping Contacts,
+a call icon, and other UI elements) to still land touches on the wrong
+element.
+
+The actual working model turned out to be simpler: send touchPoint.pos()
+through completely unscaled, and let AA map the declared touch surface
+(InputService::fillFeatures' touch_screen_config, now set to the real
+full-screen coordinate space by 0009) to its own rendered video resolution
+internally. This matches how most touchscreen protocols separate
+"declare your device's coordinate space once" from "report raw
+coordinates in it" -- the client-side scale-up this code used to do was
+redundant with (and inconsistent against) whatever AA already does
+internally with the declared touch_screen_config, not something AA was
+relying on the host to do itself.
+
+Confirmed by on-device testing: with this change (paired with 0009),
+tapping application icons opens the correct one. Some imprecision remains
+when icons are placed very close together, but that's ordinary
+touch-target/spacing tolerance, not a systemic coordinate error like the
+previous scaled variants exhibited.
+
+touchscreenGeometry_ is retained on InputDevice only because
+IInputDevice::getTouchscreenGeometry() (used solely for the
+touch_screen_config declaration in InputService::fillFeatures) still reads
+it; it is no longer read anywhere in the touch-dispatch path itself.
+
+Upstream-Status: Inappropriate [oe-specific: this board's touch pipeline
+needs raw passthrough, not host-side scaling, to align with AA's own
+internal coordinate mapping]
+
+diff --git a/src/autoapp/Projection/InputDevice.cpp b/src/autoapp/Projection/InputDevice.cpp
+--- a/src/autoapp/Projection/InputDevice.cpp
++++ b/src/autoapp/Projection/InputDevice.cpp
+@@ -291,9 +291,17 @@
+         break;
+     };
+ 
++    // Send raw touch-surface coordinates unscaled: AA maps the declared
++    // touch_screen_config (InputService::fillFeatures, via
++    // getTouchscreenGeometry() -- see ServiceFactory.cpp) to its own
++    // rendered video resolution internally. Scaling here client-side (as
++    // this used to, against either the video widget's on-screen size or
++    // the full screen) is redundant with that and was confirmed by
++    // on-device testing (tapping application icons) to land touches on the
++    // wrong element regardless of which rect was used as the divisor.
+     const QTouchEvent::TouchPoint& touchPoint = touch->touchPoints().first();
+-    const uint32_t x = (static_cast<float>(touchPoint.pos().x()) / touchscreenGeometry_.width()) * displayGeometry_.width();
+-    const uint32_t y = (static_cast<float>(touchPoint.pos().y()) / touchscreenGeometry_.height()) * displayGeometry_.height();
++    const uint32_t x = static_cast<uint32_t>(touchPoint.pos().x());
++    const uint32_t y = static_cast<uint32_t>(touchPoint.pos().y());
+     OPENAUTO_LOG(info) << "[InputDevice] dispatching NATIVE touch x=" << x << " y=" << y
+                         << " rawPos=(" << touchPoint.pos().x() << "," << touchPoint.pos().y() << ")";
+     eventHandler_->onTouchEvent({type, x, y, 0});

@@ -1,0 +1,109 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: render video into the panel's real visible area, fix focus
+
+This board's HDMI scanout is forced to a 1280x720 CEA timing -- the
+only mode this hardware's video output (VOP) will actually activate;
+the physical panel has no real onboard scaler and is natively smaller.
+On-screen testing this session showed the panel only ever displays
+roughly the first 1024x600 of whatever larger frame it receives --
+top-left anchored, not centered or scaled -- which matches this
+panel's real EDID-reported native resolution exactly, and also matches
+its touchscreen controller's own hardware calibration range (confirmed
+via Qt's evdevtouch device discovery log: "min X: 0 max X: 1024",
+"min Y: 0 max Y: 600").
+
+Filling the entire 1280x720 frame therefore means content drawn near
+the right/bottom edges of what Android Auto sends lands in the region
+the panel never displays. setFullScreen(true) cannot be used to render
+into a deliberately smaller area: it always re-expands the widget to
+the *entire* screen's geometry regardless of any geometry set
+beforehand (QVideoWidget::setFullScreen -> showFullScreen(), defined
+to cover the whole screen). Manage geometry directly instead, into a
+fixed real-panel-sized box matching kPanelVisibleGeometry here -- which
+must stay in sync with the identical geometry ServiceFactory now hands
+to InputDevice (see the paired ServiceFactory.cpp change) so touch
+coordinates line up with what's actually drawn.
+
+Losing setFullScreen()/showFullScreen() also loses the window
+activation it provided implicitly. Without an explicit
+raise()+activateWindow(), this widget was observed to never actually
+receive input focus on this EGLFS backend -- touch appeared completely
+dead (not just miscalibrated) even though the widget was visibly on
+screen and Qt's evdevtouch plugin had successfully initialized the
+touch device. Separately, an earlier version of this fix called
+setWindowFlags() from onStartPlayback(), i.e. on the widget *after* it
+had already been created/shown -- changing window flags on an
+already-realized top-level widget makes Qt destroy and recreate its
+native window, which compounded the focus problem. Flags are now set
+exactly once in createVideoOutput(), before the widget's native window
+is ever created.
+
+Upstream-Status: Inappropriate [oe-specific: workarounds for a
+scaler-less display panel and an EGLFS window-focus/activation issue,
+both observed on this board's Qt eglfs/KMS backend]
+
+diff --git a/src/autoapp/Projection/QtVideoOutput.cpp b/src/autoapp/Projection/QtVideoOutput.cpp
+index ad4636c..72da9db 100644
+--- a/src/autoapp/Projection/QtVideoOutput.cpp
++++ b/src/autoapp/Projection/QtVideoOutput.cpp
+@@ -17,6 +17,7 @@
+ */
+ 
+ #include <QApplication>
++#include <QScreen>
+ #include <f1x/openauto/autoapp/Projection/QtVideoOutput.hpp>
+ #include <f1x/openauto/Common/Log.hpp>
+ 
+@@ -43,6 +44,12 @@ void QtVideoOutput::createVideoOutput()
+ {
+     OPENAUTO_LOG(debug) << "[QtVideoOutput] create.";
+     videoWidget_ = std::make_unique<QVideoWidget>();
++    // Set window flags here, once, before the widget's native window has
++    // ever been created/shown. Calling setWindowFlags() on an
++    // already-realized top-level widget (as onStartPlayback() used to)
++    // makes Qt destroy and recreate its underlying platform window, which
++    // was observed to be unreliable on this EGLFS/KMS backend.
++    videoWidget_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+     mediaPlayer_ = std::make_unique<QMediaPlayer>(nullptr, QMediaPlayer::StreamPlayback);
+ }
+ 
+@@ -70,11 +77,36 @@ void QtVideoOutput::write(uint64_t, const aasdk::common::DataConstBuffer& buffer
+ 
+ void QtVideoOutput::onStartPlayback()
+ {
++    // This board's HDMI scanout is forced to 1280x720 (the only CEA timing
++    // this hardware's video output will activate -- the physical panel is
++    // natively smaller and has no real onboard scaler). On-screen testing
++    // this session showed the panel only ever displays roughly the first
++    // 1024x600 of whatever larger frame it receives -- top-left anchored,
++    // not centered or scaled -- matching this panel's real EDID-reported
++    // native resolution exactly. Render into that same real area (must
++    // stay in sync with the screenGeometry ServiceFactory hands to
++    // InputDevice, so touch coordinates line up with what's actually
++    // drawn) instead of the full 1280x720 the screen can physically scan
++    // out but the panel doesn't display.
++    //
++    // setFullScreen(true) (the previous approach here) always re-expands
++    // the widget to the *entire* screen's geometry regardless of any
++    // geometry set beforehand (QVideoWidget::setFullScreen ->
++    // showFullScreen(), defined to cover the whole screen), so it can't be
++    // used to render into a deliberately smaller area -- geometry/flags
++    // are managed directly instead. raise()+activateWindow() replace the
++    // window-activation showFullScreen() used to provide implicitly; without
++    // them this widget was observed to never actually receive input focus
++    // on this EGLFS backend (touch appeared completely dead, not just
++    // miscalibrated) even though it was visibly on screen.
++    static const QRect kPanelVisibleGeometry(0, 0, 1024, 600);
++
++    videoWidget_->setGeometry(kPanelVisibleGeometry);
+     videoWidget_->setAspectRatioMode(Qt::IgnoreAspectRatio);
+-    videoWidget_->setFocus();
+-    videoWidget_->setWindowFlags(Qt::WindowStaysOnTopHint);
+-    videoWidget_->setFullScreen(true);
+     videoWidget_->show();
++    videoWidget_->raise();
++    videoWidget_->activateWindow();
++    videoWidget_->setFocus();
+ 
+     mediaPlayer_->setVideoOutput(videoWidget_.get());
+     mediaPlayer_->setMedia(QMediaContent(), &videoBuffer_);

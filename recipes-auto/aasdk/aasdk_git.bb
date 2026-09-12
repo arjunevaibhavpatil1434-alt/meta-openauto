@@ -12,6 +12,7 @@ SRC_URI = "git://github.com/f1xpl/aasdk.git;protocol=https;branch=development \
     file://0004-cmake-add-install-rules.patch \
     file://0005-fix-unaligned-timestamp-and-framesize-reads.patch \
     file://0006-fix-messenger-intertwined-channels-false-positive.patch \
+    file://0007-fix-touch-proto3-zero-value-omission.patch \
 "
 SRCREV = "046b3b381595509d0939fa84b14a90978f46ff63"
 

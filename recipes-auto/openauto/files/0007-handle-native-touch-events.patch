@@ -1,0 +1,161 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: handle QTouchEvent directly, not just synthesized mouse events
+
+Qt's evdevtouch handler (confirmed via its own debug log on this
+board) only ever calls QWindowSystemInterface::handleTouchEvent() for
+this touchscreen -- never handleMouseEvent(). InputDevice previously
+only reacted to QEvent::MouseButtonPress/Release/Move, which depend
+entirely on Qt's touch-to-mouse synthesis fallback
+(Qt::AA_SynthesizeMouseForUnhandledTouchEvents, qguiapplication.cpp)
+actually firing for every touch. That fallback has several layered
+preconditions -- the touch event must reach a window, not be accepted
+by anything along the way, etc. -- that proved unreliable enough on
+this EGLFS backend that touch was observed to be completely
+non-responsive, even after the touch device was confirmed working at
+the kernel and Qt-plugin level (evdevtouch successfully opens the
+device and reads its calibration range) and after fixing an earlier,
+separate window-focus problem.
+
+eventFilter() is an application-level event filter, so it sees the
+raw QTouchEvent (via QCoreApplication::notify()) before any of that
+downstream accept/ignore-based synthesis logic even runs. Handle
+QEvent::TouchBegin/TouchUpdate/TouchEnd directly instead of relying on
+synthesis: extract the first touch point and feed it through the same
+onTouchEvent() call handleTouchEvent() already uses for the mouse
+path. The touch event is explicitly accept()ed afterward so Qt's
+synthesis fallback does not also fire a QMouseEvent for the same
+physical touch, which would otherwise be double-processed by the
+existing mouse-based path.
+
+Also adds temporary diagnostic logging (every event type eventFilter
+sees, plus confirmation whenever a touch is actually dispatched to
+eventHandler_) -- touch remained non-responsive even after this fix
+went in, so the next debugging step is confirming from real device
+logs whether events are reaching this class at all, rather than
+continuing to reason from source alone.
+
+Upstream-Status: Inappropriate [oe-specific: workaround for touch
+delivery being unreliable via Qt's mouse-synthesis-from-touch fallback
+on this board's EGLFS/KMS backend, plus temporary diagnostics]
+
+diff --git a/include/f1x/openauto/autoapp/Projection/InputDevice.hpp b/include/f1x/openauto/autoapp/Projection/InputDevice.hpp
+index b6197a1..7156b58 100644
+--- a/include/f1x/openauto/autoapp/Projection/InputDevice.hpp
++++ b/include/f1x/openauto/autoapp/Projection/InputDevice.hpp
+@@ -20,6 +20,7 @@
+ 
+ #include <QObject>
+ #include <QKeyEvent>
++#include <QTouchEvent>
+ #include <f1x/openauto/autoapp/Projection/IInputDevice.hpp>
+ #include <f1x/openauto/autoapp/Configuration/IConfiguration.hpp>
+ 
+@@ -51,6 +52,7 @@ private:
+     bool handleKeyEvent(QEvent* event, QKeyEvent* key);
+     void dispatchKeyEvent(ButtonEvent event);
+     bool handleTouchEvent(QEvent* event);
++    bool handleNativeTouchEvent(QEvent* event);
+ 
+     QObject& parent_;
+     configuration::IConfiguration::Pointer configuration_;
+diff --git a/src/autoapp/Projection/InputDevice.cpp b/src/autoapp/Projection/InputDevice.cpp
+index 95d2a97..1fff0c2 100644
+--- a/src/autoapp/Projection/InputDevice.cpp
++++ b/src/autoapp/Projection/InputDevice.cpp
+@@ -61,6 +61,16 @@ bool InputDevice::eventFilter(QObject* obj, QEvent* event)
+ {
+     std::lock_guard<decltype(mutex_)> lock(mutex_);
+ 
++    // Temporary diagnostic: log every event type this application-level
++    // filter actually sees, and whether eventHandler_ is even installed at
++    // the time, so a real tap on the device can be correlated against what
++    // (if anything) arrives here -- rather than continuing to guess at the
++    // cause from source reading alone after repeated fixes did not resolve
++    // touch being completely non-responsive.
++    OPENAUTO_LOG(info) << "[InputDevice] eventFilter saw type=" << event->type()
++                        << " obj=" << (obj != nullptr ? obj->metaObject()->className() : "null")
++                        << " handlerInstalled=" << (eventHandler_ != nullptr);
++
+     if(eventHandler_ != nullptr)
+     {
+         if(event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)
+@@ -75,6 +85,10 @@ bool InputDevice::eventFilter(QObject* obj, QEvent* event)
+         {
+             return this->handleTouchEvent(event);
+         }
++        else if(event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate || event->type() == QEvent::TouchEnd)
++        {
++            return this->handleNativeTouchEvent(event);
++        }
+     }
+ 
+     return QObject::eventFilter(obj, event);
+@@ -209,12 +223,68 @@ bool InputDevice::handleTouchEvent(QEvent* event)
+     {
+         const uint32_t x = (static_cast<float>(mouse->pos().x()) / touchscreenGeometry_.width()) * displayGeometry_.width();
+         const uint32_t y = (static_cast<float>(mouse->pos().y()) / touchscreenGeometry_.height()) * displayGeometry_.height();
++        OPENAUTO_LOG(info) << "[InputDevice] dispatching MOUSE-derived touch x=" << x << " y=" << y;
+         eventHandler_->onTouchEvent({type, x, y, 0});
+     }
+ 
+     return true;
+ }
+ 
++bool InputDevice::handleNativeTouchEvent(QEvent* event)
++{
++    // This board's touch panel (a WaveShare USB HID multitouch device) is
++    // reported by Qt's evdevtouch handler purely as QTouchEvents --
++    // handleTouchEvent() above only ever fires for QMouseEvents, which
++    // depend on Qt's touch-to-mouse synthesis fallback
++    // (AA_SynthesizeMouseForUnhandledTouchEvents) actually triggering. That
++    // fallback has several layered preconditions (event acceptance state,
++    // which window/widget ends up receiving the touch, etc.) that proved
++    // unreliable enough on this EGLFS backend that touch was observed
++    // completely non-responsive. Handling QTouchEvent directly here instead
++    // is far more robust: eventFilter() (being an application-level filter)
++    // sees the raw touch event before any of that synthesis logic runs, so
++    // this path does not depend on it at all.
++    if(!configuration_->getTouchscreenEnabled())
++    {
++        return true;
++    }
++
++    QTouchEvent* touch = static_cast<QTouchEvent*>(event);
++    if(touch->touchPoints().isEmpty())
++    {
++        return true;
++    }
++
++    aasdk::proto::enums::TouchAction::Enum type;
++    switch(event->type())
++    {
++    case QEvent::TouchBegin:
++        type = aasdk::proto::enums::TouchAction::PRESS;
++        break;
++    case QEvent::TouchEnd:
++        type = aasdk::proto::enums::TouchAction::RELEASE;
++        break;
++    default:
++        type = aasdk::proto::enums::TouchAction::DRAG;
++        break;
++    };
++
++    const QTouchEvent::TouchPoint& touchPoint = touch->touchPoints().first();
++    const uint32_t x = (static_cast<float>(touchPoint.pos().x()) / touchscreenGeometry_.width()) * displayGeometry_.width();
++    const uint32_t y = (static_cast<float>(touchPoint.pos().y()) / touchscreenGeometry_.height()) * displayGeometry_.height();
++    OPENAUTO_LOG(info) << "[InputDevice] dispatching NATIVE touch x=" << x << " y=" << y
++                        << " rawPos=(" << touchPoint.pos().x() << "," << touchPoint.pos().y() << ")";
++    eventHandler_->onTouchEvent({type, x, y, 0});
++
++    // Accept the event so Qt's touch-to-mouse synthesis (see
++    // AA_SynthesizeMouseForUnhandledTouchEvents in qguiapplication.cpp)
++    // does not also fire a synthesized QMouseEvent for the same physical
++    // touch, which handleTouchEvent() above would otherwise also process,
++    // double-sending every touch.
++    event->accept();
++    return true;
++}
++
+ bool InputDevice::hasTouchscreen() const
+ {
+     return configuration_->getTouchscreenEnabled();

@@ -10,6 +10,13 @@ SRC_URI = "git://github.com/f1xpl/openauto.git;protocol=https;branch=development
     file://0002-fix-videoservice-missing-stop-indication.patch \
     file://0003-fix-ping-request-missing-timestamp.patch \
     file://0004-show-cursor-by-default.patch \
+    file://0005-fix-video-widget-stale-geometry.patch \
+    file://0006-fix-touch-geometry-mismatch.patch \
+    file://0007-handle-native-touch-events.patch \
+    file://0008-fix-input-device-thread-affinity.patch \
+    file://0009-fix-double-scaled-touch-coordinates.patch \
+    file://0011-fix-touch-raw-passthrough.patch \
+    file://0012-fix-touch-calibration-offset.patch \
     file://openauto.init \
     file://openauto-start.sh \
     file://eglfs_kms.json \

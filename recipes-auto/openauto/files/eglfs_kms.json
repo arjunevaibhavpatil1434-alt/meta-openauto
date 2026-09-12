@@ -2,8 +2,9 @@
     "device": "/dev/dri/card0",
     "outputs": [
         {
-            "name": "HDMI-A-1",
-            "mode": "74.25 1280 1390 1430 1650 720 725 730 750 +hsync +vsync"
+            "name": "HDMI1",
+            "mode": "74.25 1280 1390 1430 1650 720 725 730 750 +hsync +vsync",
+            "primary": true
         }
     ]
 }

@@ -1,0 +1,95 @@
+From: Yocto build fix
+Subject: [PATCH] aasdk: use proto2 for touch messages so zero-valued fields aren't dropped
+
+Every one of aasdk_proto's .proto files declares `syntax="proto3"`. Proto3's
+wire format has a well-known property: a singular scalar or enum field left
+at its default (zero) value is not serialized at all -- there is no way on
+the wire to distinguish "field explicitly set to 0" from "field never set".
+
+This is fatal for TouchLocation/TouchEvent specifically, because their
+zero-valued cases are not edge cases here, they are the *common* case:
+- TouchLocation.pointer_id is always literally 0 in this single-touch
+  head unit (see InputService::onTouchEvent -- touchLocation->
+  set_pointer_id(0)), so it is omitted from literally every touch message
+  sent.
+- TouchAction.PRESS == 0 (see TouchActionEnum.proto), so touch_action is
+  omitted from the wire on every single press -- the message that starts
+  every tap.
+
+This exact failure mode -- touchscreens that work everywhere except inside
+an active Android Auto session, despite the host-side code being otherwise
+correct -- is a well-documented, previously-diagnosed issue in the wider
+openauto/aasdk/crankshaft community (see opencardev/crankshaft#352 and
+f1xpl/aasdk#32): newer/stricter Android Auto (Play Services) versions parse
+incoming messages strictly enough that a touch event missing these fields
+is silently dropped, with no error surfaced anywhere on the host side --
+which matches exactly what on-device testing here showed after two earlier,
+separate bugs (a cross-thread event-filter race and a double-scaled
+coordinate transform, both fixed in the openauto recipe) were fixed: touch
+coordinates land in valid range, PRESS/DRAG/RELEASE framing is clean, sends
+report no errors, yet the phone shows zero visible reaction.
+
+The community's fix was "convert proto3 to proto2 and recompile", since
+proto2 requires (and honors) an explicit `optional` qualifier on every
+scalar/enum field, giving real wire presence regardless of value -- matching
+what Google's actual Android Auto protocol (specified before proto3 existed)
+expects. This is more targeted than a wholesale conversion of the whole
+aasdk_proto library: only TouchLocationData.proto and TouchEventData.proto
+actually have scalar/enum fields whose legitimate value is their own zero
+default, so only those two need converting. Protobuf fully supports proto2
+messages importing proto3-syntax enums (TouchActionEnum.proto is left
+untouched) and being referenced from proto3-syntax parent messages
+(InputEventIndicationMessage.proto's `data.TouchEvent touch_event` field),
+so this does not require touching anything else.
+
+The vendored protoc here is 3.12.4, older than the 3.15 release that added
+proto3's own `optional` keyword (which would have avoided a syntax switch
+entirely), so that shortcut isn't available -- proto2 is the only option.
+
+Upstream-Status: Inappropriate [oe-specific: works around Android Auto/Play
+Services becoming stricter about proto3's implicit-zero-value field
+omission than this ~2018 protocol implementation assumed; a well-documented
+issue in the wider openauto/aasdk community]
+
+diff --git a/aasdk_proto/TouchLocationData.proto b/aasdk_proto/TouchLocationData.proto
+--- a/aasdk_proto/TouchLocationData.proto
++++ b/aasdk_proto/TouchLocationData.proto
+@@ -16,13 +16,13 @@
+ *  along with aasdk. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
+-syntax="proto3";
++syntax="proto2";
+ 
+ package f1x.aasdk.proto.data;
+ 
+ message TouchLocation
+ {
+-	uint32 x = 1;
+-	uint32 y = 2;
+-	uint32 pointer_id = 3;
++	optional uint32 x = 1;
++	optional uint32 y = 2;
++	optional uint32 pointer_id = 3;
+ }
+diff --git a/aasdk_proto/TouchEventData.proto b/aasdk_proto/TouchEventData.proto
+--- a/aasdk_proto/TouchEventData.proto
++++ b/aasdk_proto/TouchEventData.proto
+@@ -16,7 +16,7 @@
+ *  along with aasdk. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
+-syntax="proto3";
++syntax="proto2";
+ 
+ import "TouchLocationData.proto";
+ import "TouchActionEnum.proto";
+@@ -26,6 +26,6 @@
+ message TouchEvent
+ {
+     repeated data.TouchLocation touch_location = 1;
+-    uint32 action_index = 2;
+-    enums.TouchAction.Enum touch_action = 3;
++    optional uint32 action_index = 2;
++    optional enums.TouchAction.Enum touch_action = 3;
+ }

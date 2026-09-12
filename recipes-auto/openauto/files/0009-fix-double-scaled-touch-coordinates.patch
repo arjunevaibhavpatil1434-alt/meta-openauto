@@ -1,0 +1,65 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: declare the real touch surface size for AA to scale against
+
+InputService::fillFeatures() declares this board's touch surface size to
+the phone via touch_screen_config, using getTouchscreenGeometry() (this
+same screenGeometry rect). Paired with 0011, InputDevice no longer scales
+touch coordinates against AA's video resolution on the host side at all --
+it sends touchPoint.pos() through unscaled, on the theory (confirmed on
+real hardware, see 0011's commit message) that AA maps the declared touch
+surface to its own rendered video resolution internally, the same way
+essentially every touchscreen protocol separates "declare your device's
+coordinate space once" from "report raw coordinates in it".
+
+For that declaration to be accurate, this rect must match the actual
+coordinate space Qt's evdevtouch reports touchPoint.pos() in, which is the
+*full screen* (1280x720, confirmed via /sys/class/graphics/fb0's
+virtual_size) -- not QtVideoOutput's smaller (1024x600) video widget. Two
+earlier attempts at this same rect tried to make it a *scaling divisor*
+instead -- first the widget's size (assuming a client-side scale-up was
+needed to invert the widget's render-time squish), then reverted back to
+the full screen (assuming Qt's own normalization already accounted for
+everything). Both were still doing *some* client-side scaling, which
+turned out to be the wrong model entirely: real on-device testing (tapping
+Contacts, a call icon, and other UI elements with each variant) showed
+each still landing on the wrong element, until scaling was removed
+entirely in favor of raw passthrough (0011) with this rect used purely as
+the accompanying declaration. That combination was the first one confirmed
+by direct on-screen testing to actually open the right icon.
+
+Upstream-Status: Inappropriate [oe-specific: declares this board's real
+touch surface size for AA's own internal coordinate mapping]
+
+diff --git a/src/autoapp/Service/ServiceFactory.cpp b/src/autoapp/Service/ServiceFactory.cpp
+--- a/src/autoapp/Service/ServiceFactory.cpp
++++ b/src/autoapp/Service/ServiceFactory.cpp
+@@ -120,17 +120,18 @@
+         break;
+     }
+ 
+-    // screenGeometry here must match the area QtVideoOutput actually renders
+-    // into (see kPanelVisibleGeometry in QtVideoOutput.cpp), NOT the full
+-    // primaryScreen()->geometry() -- this board's HDMI scanout (1280x720) is
+-    // larger than the physical panel's real visible/native area (1024x600),
+-    // so using the full screen here would scale touch coordinates onto a
+-    // canvas bigger than what's actually shown, misplacing every touch.
+-    // 1024x600 also happens to be this exact panel's own touchscreen
+-    // hardware calibration range (confirmed via Qt's evdevtouch device
+-    // discovery log: "min X: 0 max X: 1024", "min Y: 0 max Y: 600"), so this
+-    // makes the touch transform a clean 1:1 identity mapping.
+-    QRect screenGeometry(0, 0, 1024, 600);
++    // This rect is now purely a declaration for InputService::fillFeatures'
++    // touch_screen_config, not a scaling divisor (see InputDevice's
++    // raw-passthrough touch change) -- it must match the real coordinate
++    // space Qt's evdevtouch reports touch in, which is the full screen, not
++    // QtVideoOutput's smaller on-screen video widget size. Two earlier
++    // attempts at using this rect as a client-side scaling divisor (widget
++    // size, then full screen) both still landed touches on the wrong
++    // element on real hardware; only removing client-side scaling entirely
++    // in favor of raw passthrough plus this accurate declaration was
++    // confirmed correct by on-device testing (tapping application icons).
++    QScreen* screen = QGuiApplication::primaryScreen();
++    QRect screenGeometry = screen == nullptr ? QRect(0, 0, 1, 1) : screen->geometry();
+     projection::IInputDevice::Pointer inputDevice(std::make_shared<projection::InputDevice>(*QApplication::instance(), configuration_, std::move(screenGeometry), std::move(videoGeometry)));
+ 
+     return std::make_shared<InputService>(ioService_, messenger, std::move(inputDevice));

@@ -1,0 +1,84 @@
+From: Yocto build fix
+Subject: [PATCH] autoapp: install/remove the input event filter on the GUI thread
+
+InputDevice::start()/stop() are AASDK service lifecycle callbacks, invoked
+from whichever boost::asio worker thread happens to handle the relevant
+service binding/teardown message -- not the Qt GUI thread. `parent_` (the
+QApplication instance) and `this` (moved to parent_'s thread in the
+InputDevice constructor) both live on the GUI thread, but
+parent_.installEventFilter(this)/removeEventFilter(this) directly mutate
+parent_'s internal event-filter list, which the GUI thread's event loop
+concurrently walks on every single dispatched event. Calling those methods
+from a different thread than the one both objects live on is an
+unsynchronized cross-thread QObject access.
+
+This was diagnosed on-device after the 0007 native-touch-event fix still
+left touch completely non-responsive: the "[InputDevice] start." log line
+(and the AASDK binding-request/status logs around it) is emitted on an
+io_service worker thread, visibly different from the thread that logs
+"[QtVideoOutput] create." (a GUI-thread object created during app startup).
+The 0007 patch's eventFilter() diagnostic -- logged unconditionally for
+every event the filter sees -- never fired even once during an active
+Android Auto session with the touchscreen being tapped repeatedly, meaning
+installEventFilter() silently had no effect: the cross-thread call does not
+trip Qt's same-thread assertion (that check compares parent_'s thread
+against the filter object's thread, which do match thanks to the
+constructor's moveToThread -- it says nothing about which thread is doing
+the calling), so it neither warns nor crashes, it just races with the GUI
+thread's own iteration of that same list and loses.
+
+Route both calls through QMetaObject::invokeMethod(this, ..., Qt::
+QueuedConnection) so they actually run on `this`'s (i.e. the GUI thread's)
+event loop instead of executing inline on the calling io_service thread.
+
+Upstream-Status: Inappropriate [oe-specific: works around a cross-thread
+QObject::installEventFilter/removeEventFilter race between this project's
+boost::asio service-callback threads and the Qt GUI thread, observed on
+this board's EGLFS backend while diagnosing touch being completely
+non-responsive]
+
+diff --git a/src/autoapp/Projection/InputDevice.cpp b/src/autoapp/Projection/InputDevice.cpp
+index 1fff0c2..8a2c9e1 100644
+--- a/src/autoapp/Projection/InputDevice.cpp
++++ b/src/autoapp/Projection/InputDevice.cpp
+@@ -45,7 +45,25 @@ void InputDevice::start(IInputDeviceEventHandler& eventHandler)
+
+     OPENAUTO_LOG(info) << "[InputDevice] start.";
+     eventHandler_ = &eventHandler;
+-    parent_.installEventFilter(this);
++
++    // start() runs on whichever boost::asio worker thread happens to handle
++    // the AASDK service binding callback -- NOT the Qt GUI thread that both
++    // `this` (moved to parent's thread in the constructor) and `parent_`
++    // (the QApplication instance) actually live on. installEventFilter()
++    // mutates parent_'s internal event-filter list, which the GUI thread's
++    // event loop concurrently reads on every dispatched event; calling it
++    // directly from a non-GUI thread is an unsynchronized cross-thread
++    // QObject access, confirmed here by diagnostic logging: "[InputDevice]
++    // start." fires on the io_service thread while "[QtVideoOutput] create."
++    // (a GUI-thread object) fires on a different thread id, and the
++    // eventFilter() diagnostic added to trace touch delivery never logs a
++    // single call afterwards -- i.e. the filter silently never takes effect,
++    // which is exactly the symptom (touch completely non-responsive) all the
++    // preceding geometry/native-touch-event fixes did not resolve. Queue the
++    // actual installation onto `this`'s own (GUI) thread instead.
++    QMetaObject::invokeMethod(this, [this]() {
++        parent_.installEventFilter(this);
++    }, Qt::QueuedConnection);
+ }
+
+ void InputDevice::stop()
+@@ -53,8 +71,12 @@ void InputDevice::stop()
+     std::lock_guard<decltype(mutex_)> lock(mutex_);
+
+     OPENAUTO_LOG(info) << "[InputDevice] stop.";
+-    parent_.removeEventFilter(this);
+     eventHandler_ = nullptr;
++
++    // See start() -- same cross-thread hazard applies to removeEventFilter().
++    QMetaObject::invokeMethod(this, [this]() {
++        parent_.removeEventFilter(this);
++    }, Qt::QueuedConnection);
+ }
+
+ bool InputDevice::eventFilter(QObject* obj, QEvent* event)
